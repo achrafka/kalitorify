@@ -232,8 +232,20 @@ setup_iptables() {
             iptables -t nat -A OUTPUT -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK SYN -j REDIRECT --to-ports $trans_port
 
             ## *filter INPUT
-            iptables -A INPUT -m state --state ESTABLISHED -j ACCEPT
+            iptables -A INPUT -m conntrack --ctstate ESTABLISHED -j ACCEPT
             iptables -A INPUT -i lo -j ACCEPT
+
+            # Limit traffic to prevent DoS attacks
+            iptables -A INPUT -p tcp --dport 22 -m limit --limit 5/min -j ACCEPT
+
+            # Drop NULL packets
+            iptables -A INPUT -p tcp --tcp-flags ALL NONE -j DROP
+
+            # Drop malformed FIN packets
+            iptables -A INPUT -p tcp --tcp-flags FIN,ACK FIN -j DROP
+
+            # Add logging rules before dropping packets
+            iptables -A INPUT -j LOG --log-prefix "INPUT_DROP: "
 
             # Drop everything else
             iptables -A INPUT -j DROP
@@ -246,18 +258,19 @@ setup_iptables() {
             # Fix for potential kernel transproxy packet leaks
             # see: https://lists.torproject.org/pipermail/tor-talk/2014-March/032507.html
             iptables -A OUTPUT -m conntrack --ctstate INVALID -j DROP
-
-            iptables -A OUTPUT -m state --state INVALID -j DROP
-            iptables -A OUTPUT -m state --state ESTABLISHED -j ACCEPT
+            iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED -j ACCEPT
 
             # Allow Tor process output
-            iptables -A OUTPUT -m owner --uid-owner $tor_uid -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK SYN -m state --state NEW -j ACCEPT
+            iptables -A OUTPUT -m owner --uid-owner $tor_uid -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK SYN -m conntrack --ctstate NEW -j ACCEPT
 
             # Allow loopback output
             iptables -A OUTPUT -d 127.0.0.1/32 -o lo -j ACCEPT
 
             # Tor transproxy magic
             iptables -A OUTPUT -d 127.0.0.1/32 -p tcp -m tcp --dport $trans_port --tcp-flags FIN,SYN,RST,ACK SYN -j ACCEPT
+
+            # Add logging rules before dropping packets
+            iptables -A OUTPUT -j LOG --log-prefix "OUTPUT_DROP: "
 
             # Drop everything else
             iptables -A OUTPUT -j DROP
